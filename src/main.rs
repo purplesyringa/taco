@@ -12,7 +12,7 @@ mod huffman;
 mod split;
 mod varint;
 
-use autocompress::{autocompress, autocompress_one, AutoCompressOpts};
+use autocompress::{autocompress, AutoCompressOpts};
 
 fn main() {
     let mut args = std::env::args();
@@ -28,13 +28,16 @@ fn main() {
 
     let compressed = autocompress(&strings_refs, AutoCompressOpts::default());
 
-    // let result = compressed.engine.to_bits();
-    // result.extend(&compressed.binary_data);
+    let mut result = compressed.engine.to_bits();
+    for chunk in compressed.binary_data {
+        result.extend(&chunk);
+    }
 
-    // println!("{:?}", compressed.engine);
+    // eprintln!("{:?}", compressed.engine);
     // println!("{:?}", result.to_bytes().len());
-    println!("{:?}", compressed.weight());
-    // std::io::stdout()
-    //     .write(&result.to_bytes())
-    //     .expect("Failed to write to stdout");
+    // println!("{:?}", compressed.weight());
+
+    std::io::stdout()
+        .write(&result.to_bytes())
+        .expect("Failed to write to stdout");
 }
