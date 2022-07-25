@@ -43,3 +43,21 @@ pub fn compress_varint(num: i128) -> Bits {
     }
     bits
 }
+
+pub fn compress_fixint(mut num: u128, bit_length: usize) -> Bits {
+    let mut bits = Bits::new();
+    for _ in 0..bit_length {
+        bits.push((num % 2) != 0);
+        num /= 2;
+    }
+    bits
+}
+
+pub fn get_bit_length(mut num: u128) -> usize {
+    let mut bit_length = 0;
+    while num > 0 {
+        num /= 2;
+        bit_length += 1;
+    }
+    bit_length
+}

@@ -1,21 +1,32 @@
-use crate::varint::compress_varint;
-use crate::compress::{Engine, Compress, CompressedData, AutoCompressOpts};
+use crate::autocompress::AutoCompressOpts;
+use crate::compress::{Compress, CompressedData, Engine};
+use crate::varint::{compress_fixint, compress_varint, get_bit_length};
 
 impl Compress for i128 {
     fn compress_multiple(objs: &[&Self], _opts: AutoCompressOpts) -> CompressedData {
-        let avg = if objs.len() <= 3 {
-            0
-        } else {
-            objs.iter().map(|x| **x).sum::<i128>() / (objs.len() as i128)
-        };
-        let engine = if avg == 0 {
-            Engine::VarInt
-        } else {
-            Engine::BiasedVarInt { bias: avg }
-        };
+        // Constant
+        if objs.len() <= 1 {
+            return CompressedData {
+                engine: Engine::VarInt,
+                binary_data: objs.iter().map(|x| compress_varint(**x)).collect(),
+            };
+        }
+
+        // No compression
+        let min = **objs.iter().min().unwrap();
+        let max = **objs.iter().max().unwrap();
+
+        let bit_length = get_bit_length((max - min) as u128);
+
         CompressedData {
-            engine,
-            binary_data: objs.iter().map(|x| compress_varint(**x - avg)).collect(),
+            engine: Engine::FixedInt {
+                bias: min,
+                length: bit_length,
+            },
+            binary_data: objs
+                .iter()
+                .map(|num| compress_fixint((**num - min) as u128, bit_length))
+                .collect(),
         }
     }
 

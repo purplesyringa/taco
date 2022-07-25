@@ -1,31 +1,34 @@
+#![feature(specialization)]
+
+use std::io::Write;
+
+mod autocompress;
 mod bits;
-mod varint;
 mod compress;
 mod compress_int;
 mod compress_str;
 mod compress_vec;
+mod huffman;
 mod split;
+mod varint;
 
-use compress::{CompressedData, AutoCompressOpts, autocompress_one};
+use autocompress::{autocompress_one, AutoCompressOpts};
 
 fn main() {
-    let compressed = autocompress_one(&"6
-4 6 3
-12 9 8
-3 3 2
-8 8
-3 3 2
-9 5
-4 5 2
-10 11
-5 4 2
-9 11
-10 10 3
-11 45 14".to_string(), AutoCompressOpts::default());
+    let mut args = std::env::args();
+    args.next();
+    let path = args.next().expect("Need file path as first argument");
+
+    let s = std::fs::read_to_string(path).expect("Failed to read file");
+
+    let compressed = autocompress_one(&s, AutoCompressOpts::default());
 
     let mut result = compressed.engine.to_bits();
     result.extend(&compressed.binary_data[0]);
 
     println!("{:?}", compressed.engine);
-    println!("{:?}", result.to_bytes());
+    println!("{:?}", result.to_bytes().len());
+    // std::io::stdout()
+    //     .write(&result.to_bytes())
+    //     .expect("Failed to write to stdout");
 }

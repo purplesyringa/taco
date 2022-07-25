@@ -1,17 +1,21 @@
-#[derive(Clone, Debug)]
+use std::fmt::Debug;
+
+#[derive(Clone)]
 pub struct Bits {
     bits: Vec<bool>,
 }
 
 impl Bits {
     pub fn new() -> Self {
-        Self {
-            bits: Vec::new(),
-        }
+        Self { bits: Vec::new() }
     }
 
     pub fn push(&mut self, x: bool) {
         self.bits.push(x);
+    }
+
+    pub fn pop(&mut self) -> Option<bool> {
+        self.bits.pop()
     }
 
     pub fn extend(&mut self, rhs: &Bits) {
@@ -38,3 +42,11 @@ impl Bits {
     }
 }
 
+impl Debug for Bits {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for bit in &self.bits {
+            write!(f, "{}", if *bit { 1 } else { 0 })?;
+        }
+        Ok(())
+    }
+}
