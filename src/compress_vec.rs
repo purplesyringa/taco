@@ -1,11 +1,58 @@
-use crate::autocompress::{autocompress, AutoCompressOpts};
+use crate::autocompress::{autocompress, autocompress_one, AutoCompressOpts};
 use crate::bits::Bits;
-use crate::compress::{Compress, CompressedData, Engine};
+use crate::compress::{Compress, CompressedData, Engine, MultiCompressedData};
 use crate::split::try_split_by;
 use crate::varint::{compress_fixint, get_bit_length};
 
 impl<T: Compress> Compress for Vec<&T> {
-    fn compress_multiple(objs: &[&Self], opts: AutoCompressOpts) -> CompressedData {
+    fn compress(&self, opts: AutoCompressOpts) -> CompressedData {
+        // RLE
+        let mut run_lengths: Vec<usize> = Vec::new();
+        let mut run_values: Vec<&T> = Vec::new();
+        let mut l = 0;
+        while l < self.len() {
+            let mut r = l;
+            while r < self.len() && self[r] == self[l] {
+                r += 1;
+            }
+            run_lengths.push(r - l);
+            run_values.push(self[l]);
+            l = r;
+        }
+
+        if run_lengths.len() < self.len() / 2 {
+            let run_lengths_compressed =
+                autocompress_one(&run_lengths, AutoCompressOpts::default());
+            let run_values_compressed = autocompress_one(&run_values, AutoCompressOpts::default());
+
+            let mut binary_data = run_lengths_compressed.binary_data;
+            binary_data.extend(&run_values_compressed.binary_data);
+
+            return CompressedData {
+                engine: Engine::VecRLE {
+                    length: Box::new(run_lengths_compressed.engine),
+                    item: Box::new(run_values_compressed.engine),
+                },
+                binary_data,
+            };
+        }
+
+        if let Some(mut data) = <T as EncodeVecSorted>::encode_vec_sorted(&[&self], opts) {
+            return CompressedData {
+                engine: data.engine,
+                binary_data: data.binary_data.pop().unwrap(),
+            };
+        }
+
+        // No compression
+        let mut data = encode_vec_raw(&[&self], opts);
+        CompressedData {
+            engine: data.engine,
+            binary_data: data.binary_data.pop().unwrap(),
+        }
+    }
+
+    fn compress_multiple(objs: &[&Self], opts: AutoCompressOpts) -> MultiCompressedData {
         // RLE
         let objs_rle: Vec<(Vec<usize>, Vec<&T>)> = objs
             .iter()
@@ -46,7 +93,7 @@ impl<T: Compress> Compress for Vec<&T> {
                 bits.extend(&run_values_compressed.binary_data[i]);
             }
 
-            return CompressedData {
+            return MultiCompressedData {
                 engine: Engine::VecRLE {
                     length: Box::new(run_lengths_compressed.engine),
                     item: Box::new(run_values_compressed.engine),
@@ -80,7 +127,12 @@ impl<T: Compress> Compress for Vec<&T> {
 }
 
 impl<T: Compress> Compress for Vec<T> {
-    default fn compress_multiple(objs: &[&Self], opts: AutoCompressOpts) -> CompressedData {
+    default fn compress(&self, opts: AutoCompressOpts) -> CompressedData {
+        let refs: Vec<&T> = self.iter().collect();
+        refs.compress(opts)
+    }
+
+    default fn compress_multiple(objs: &[&Self], opts: AutoCompressOpts) -> MultiCompressedData {
         let vecs: Vec<Vec<&T>> = objs.iter().map(|vec| vec.iter().collect()).collect();
         let refs: Vec<&Vec<&T>> = vecs.iter().collect();
         Vec::<&T>::compress_multiple(&refs, opts)
@@ -93,7 +145,7 @@ impl<T: Compress> Compress for Vec<T> {
     }
 }
 
-pub fn encode_vec_raw<T: Compress>(objs: &[&Vec<&T>], opts: AutoCompressOpts) -> CompressedData {
+fn encode_vec_raw<T: Compress>(objs: &[&Vec<&T>], opts: AutoCompressOpts) -> MultiCompressedData {
     let lengths: Vec<usize> = objs.iter().map(|vec| vec.len()).collect();
     let lengths_refs: Vec<&usize> = lengths.iter().collect();
     let lengths_compressed = autocompress(&lengths_refs, AutoCompressOpts::default());
@@ -118,7 +170,7 @@ pub fn encode_vec_raw<T: Compress>(objs: &[&Vec<&T>], opts: AutoCompressOpts) ->
         binary_data.push(bits);
     }
 
-    CompressedData {
+    MultiCompressedData {
         engine: Engine::Vec {
             length: Box::new(lengths_compressed.engine),
             item: Box::new(items_compressed.engine),
@@ -127,15 +179,18 @@ pub fn encode_vec_raw<T: Compress>(objs: &[&Vec<&T>], opts: AutoCompressOpts) ->
     }
 }
 
-pub trait EncodeVecSorted {
-    fn encode_vec_sorted(objs: &[&Vec<&Self>], opts: AutoCompressOpts) -> Option<CompressedData>;
+trait EncodeVecSorted {
+    fn encode_vec_sorted(
+        objs: &[&Vec<&Self>],
+        opts: AutoCompressOpts,
+    ) -> Option<MultiCompressedData>;
 }
 
 impl<T> EncodeVecSorted for T {
     default fn encode_vec_sorted(
         _objs: &[&Vec<&Self>],
         _opts: AutoCompressOpts,
-    ) -> Option<CompressedData> {
+    ) -> Option<MultiCompressedData> {
         None
     }
 }
@@ -143,7 +198,7 @@ impl<T> EncodeVecSorted for T {
 macro_rules! impl_int {
     ($($t:ty),*) => {
         $(impl EncodeVecSorted for $t {
-            fn encode_vec_sorted(objs: &[&Vec<&Self>], opts: AutoCompressOpts) -> Option<CompressedData> {
+            fn encode_vec_sorted(objs: &[&Vec<&Self>], opts: AutoCompressOpts) -> Option<MultiCompressedData> {
                 if objs.is_empty() || objs.iter().all(|vec| vec.is_empty()) || !objs.iter().all(|vec| vec.windows(2).all(|window| window[0] <= window[1])) {
                     return None;
                 }
@@ -157,7 +212,7 @@ macro_rules! impl_int {
                 let min_elems_compressed = autocompress(&min_elems, opts);
                 let max_elems_compressed = autocompress(&max_elems, opts);
 
-                Some(CompressedData {
+                Some(MultiCompressedData {
                     engine: Engine::IntSet {
                         min: Box::new(min_elems_compressed.engine),
                         max: Box::new(max_elems_compressed.engine),

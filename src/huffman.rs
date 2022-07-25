@@ -1,22 +1,21 @@
 use crate::autocompress::{autocompress_one, AutoCompressOpts};
 use crate::bits::Bits;
-use crate::compress::{Compress, CompressedData, Engine};
-use crate::compress_vec::{encode_vec_raw, EncodeVecSorted};
+use crate::compress::{Compress, Engine, MultiCompressedData};
 use crate::varint::{compress_fixint, get_bit_length};
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 trait Huffman {
-    fn huffman(objs: &[&Self], opts: AutoCompressOpts) -> CompressedData;
+    fn huffman(objs: &[&Self], opts: AutoCompressOpts) -> MultiCompressedData;
 }
 
 impl<T: Compress> Huffman for T {
-    default fn huffman(objs: &[&T], opts: AutoCompressOpts) -> CompressedData {
+    default fn huffman(objs: &[&T], opts: AutoCompressOpts) -> MultiCompressedData {
         huffman_unordered(objs, opts)
     }
 }
 
 impl<T: Compress + Ord> Huffman for T {
-    fn huffman(objs: &[&T], opts: AutoCompressOpts) -> CompressedData {
+    fn huffman(objs: &[&T], opts: AutoCompressOpts) -> MultiCompressedData {
         let unordered = huffman_unordered(objs, opts);
         let ordered = huffman_ordered(objs, opts);
         if unordered.weight() < ordered.weight() {
@@ -27,7 +26,7 @@ impl<T: Compress + Ord> Huffman for T {
     }
 }
 
-pub fn huffman<T: Compress>(objs: &[&T], opts: AutoCompressOpts) -> CompressedData {
+pub fn huffman<T: Compress>(objs: &[&T], opts: AutoCompressOpts) -> MultiCompressedData {
     <T as Huffman>::huffman(objs, opts)
 }
 
@@ -58,7 +57,10 @@ impl Ord for HeapItem {
     }
 }
 
-pub fn huffman_ordered<T: Compress + Ord>(objs: &[&T], opts: AutoCompressOpts) -> CompressedData {
+pub fn huffman_ordered<T: Compress + Ord>(
+    objs: &[&T],
+    opts: AutoCompressOpts,
+) -> MultiCompressedData {
     // The alphabet is sorted, which makes it easier to encode, but the tree has to be stored
     let mut alphabet: Vec<&T> = objs.to_vec();
     alphabet.sort();
@@ -88,14 +90,12 @@ pub fn huffman_ordered<T: Compress + Ord>(objs: &[&T], opts: AutoCompressOpts) -
         alphabet_offset.insert(obj, i);
     }
 
-    // Using autocompress_one or compress_multiple leads to compile-time overflow
-    let mut alphabet_compressed = <T as EncodeVecSorted>::encode_vec_sorted(&[&alphabet], opts)
-        .unwrap_or_else(|| encode_vec_raw(&[&alphabet], opts));
+    let alphabet_compressed = autocompress_one(&alphabet, opts);
 
-    CompressedData {
+    MultiCompressedData {
         engine: Engine::SpecificHuffman {
             alphabet_engine: Box::new(alphabet_compressed.engine),
-            alphabet_data: alphabet_compressed.binary_data.pop().unwrap(),
+            alphabet_data: alphabet_compressed.binary_data,
             tree: tree_enc,
         },
         binary_data: objs
@@ -105,7 +105,7 @@ pub fn huffman_ordered<T: Compress + Ord>(objs: &[&T], opts: AutoCompressOpts) -
     }
 }
 
-pub fn huffman_unordered<T: Compress>(objs: &[&T], opts: AutoCompressOpts) -> CompressedData {
+pub fn huffman_unordered<T: Compress>(objs: &[&T], opts: AutoCompressOpts) -> MultiCompressedData {
     // The alphabet is reordered, but the tree is implicit (canonical)
     let alphabet: HashSet<&T> = objs.iter().cloned().collect();
     let alphabet: Vec<&T> = alphabet.into_iter().collect();
@@ -121,12 +121,11 @@ pub fn huffman_unordered<T: Compress>(objs: &[&T], opts: AutoCompressOpts) -> Co
     code_lengths.sort();
 
     let lengths: Vec<&usize> = code_lengths.iter().map(|(len, _)| len).collect();
-    let mut lengths_compressed = autocompress_one(&lengths, opts);
+    let lengths_compressed = autocompress_one(&lengths, opts);
 
     let alphabet: Vec<&T> = code_lengths.iter().map(|(_, i)| alphabet[*i]).collect();
 
-    // Using autocompress_one or compress_multiple leads to compile-time overflow
-    let mut alphabet_compressed = encode_vec_raw(&[&alphabet], opts);
+    let alphabet_compressed = autocompress_one(&alphabet, opts);
 
     let mut alphabet_representations: HashMap<&T, Bits> = HashMap::new();
     let mut code = Bits::new();
@@ -148,12 +147,12 @@ pub fn huffman_unordered<T: Compress>(objs: &[&T], opts: AutoCompressOpts) -> Co
         alphabet_representations.insert(obj, code.clone());
     }
 
-    CompressedData {
+    MultiCompressedData {
         engine: Engine::CanonicalHuffman {
             alphabet_engine: Box::new(alphabet_compressed.engine),
-            alphabet_data: alphabet_compressed.binary_data.pop().unwrap(),
+            alphabet_data: alphabet_compressed.binary_data,
             lengths_engine: Box::new(lengths_compressed.engine),
-            lengths_data: lengths_compressed.binary_data.pop().unwrap(),
+            lengths_data: lengths_compressed.binary_data,
         },
         binary_data: objs
             .iter()

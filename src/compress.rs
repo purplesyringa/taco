@@ -34,6 +34,10 @@ pub enum Engine {
         max: Box<Engine>,
         unique: bool,
     },
+    Stateful {
+        inner: Box<Engine>,
+        data: Bits,
+    },
     Vec {
         length: Box<Engine>,
         item: Box<Engine>,
@@ -138,9 +142,18 @@ impl Engine {
                 bits.push(false);
                 bits.push(true);
                 bits.push(true);
+                bits.push(false);
                 bits.push(*unique);
                 min.push_to_bits(bits);
                 max.push_to_bits(bits);
+            }
+            Self::Stateful { inner, data } => {
+                bits.push(false);
+                bits.push(true);
+                bits.push(true);
+                bits.push(true);
+                inner.push_to_bits(bits);
+                bits.extend(&data);
             }
             Self::Vec { length, item } => {
                 bits.push(true);
@@ -213,10 +226,21 @@ impl Engine {
 
 pub struct CompressedData {
     pub engine: Engine,
+    pub binary_data: Bits,
+}
+
+pub struct MultiCompressedData {
+    pub engine: Engine,
     pub binary_data: Vec<Bits>,
 }
 
 impl CompressedData {
+    pub fn weight(&self) -> usize {
+        self.binary_data.len() + self.engine.weight()
+    }
+}
+
+impl MultiCompressedData {
     pub fn weight(&self) -> usize {
         self.binary_data
             .iter()
@@ -227,12 +251,16 @@ impl CompressedData {
 }
 
 pub trait Compress: Eq + Hash + std::fmt::Debug {
-    fn compress_multiple(objs: &[&Self], opts: AutoCompressOpts) -> CompressedData;
+    fn compress(&self, opts: AutoCompressOpts) -> CompressedData;
+    fn compress_multiple(objs: &[&Self], opts: AutoCompressOpts) -> MultiCompressedData;
     fn split_categories(objs: &[&Self]) -> Option<Vec<Vec<usize>>>;
 }
 
 impl<T: Compress> Compress for &T {
-    fn compress_multiple(objs: &[&Self], opts: AutoCompressOpts) -> CompressedData {
+    fn compress(&self, opts: AutoCompressOpts) -> CompressedData {
+        (*self).compress(opts)
+    }
+    fn compress_multiple(objs: &[&Self], opts: AutoCompressOpts) -> MultiCompressedData {
         let refs: Vec<&T> = objs.iter().map(|obj| **obj).collect();
         T::compress_multiple(&refs, opts)
     }

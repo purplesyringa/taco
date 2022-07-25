@@ -1,9 +1,17 @@
 use crate::autocompress::{autocompress, AutoCompressOpts};
-use crate::compress::{Compress, CompressedData, Engine};
+use crate::compress::{Compress, CompressedData, Engine, MultiCompressedData};
 use crate::split::try_split_by;
 
 impl Compress for String {
-    fn compress_multiple(objs: &[&Self], opts: AutoCompressOpts) -> CompressedData {
+    fn compress(&self, opts: AutoCompressOpts) -> CompressedData {
+        let mut data = Self::compress_multiple(&[&self], opts);
+        CompressedData {
+            engine: data.engine,
+            binary_data: data.binary_data.pop().unwrap(),
+        }
+    }
+
+    fn compress_multiple(objs: &[&Self], opts: AutoCompressOpts) -> MultiCompressedData {
         // Text separation
         for separator in ['\n', ' '] {
             if objs
@@ -24,7 +32,7 @@ impl Compress for String {
                     .collect();
                 let words_refs: Vec<&Vec<String>> = words.iter().collect();
                 let words_compressed = autocompress(&words_refs, opts);
-                return CompressedData {
+                return MultiCompressedData {
                     engine: Engine::StringConcat {
                         words: Box::new(words_compressed.engine),
                         separator,
@@ -45,7 +53,7 @@ impl Compress for String {
             let nums: Vec<i128> = objs.iter().map(|s| s.parse::<i128>().unwrap()).collect();
             let nums_refs: Vec<&i128> = nums.iter().collect();
             let nums_compressed = autocompress(&nums_refs, opts);
-            return CompressedData {
+            return MultiCompressedData {
                 engine: Engine::StringifiedInt {
                     inner: Box::new(nums_compressed.engine),
                 },
@@ -82,7 +90,7 @@ impl Compress for String {
                 bits.extend(&precisions_compressed.binary_data[i]);
             }
 
-            return CompressedData {
+            return MultiCompressedData {
                 engine: Engine::StringifiedDecimal {
                     inner: Box::new(nums_compressed.engine),
                     precision: Box::new(precisions_compressed.engine),
@@ -95,7 +103,7 @@ impl Compress for String {
         let chars_refs: Vec<&Vec<char>> = chars.iter().collect();
         let compressed = autocompress(&chars_refs, opts);
 
-        CompressedData {
+        MultiCompressedData {
             engine: Engine::String {
                 chars: Box::new(compressed.engine),
             },

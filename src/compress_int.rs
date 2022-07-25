@@ -1,12 +1,19 @@
 use crate::autocompress::AutoCompressOpts;
-use crate::compress::{Compress, CompressedData, Engine};
+use crate::compress::{Compress, CompressedData, Engine, MultiCompressedData};
 use crate::varint::{compress_fixint, compress_varint, get_bit_length};
 
 impl Compress for i128 {
-    fn compress_multiple(objs: &[&Self], _opts: AutoCompressOpts) -> CompressedData {
+    fn compress(&self, _opts: AutoCompressOpts) -> CompressedData {
+        CompressedData {
+            engine: Engine::VarInt,
+            binary_data: compress_varint(*self),
+        }
+    }
+
+    fn compress_multiple(objs: &[&Self], _opts: AutoCompressOpts) -> MultiCompressedData {
         // Constant
         if objs.len() <= 1 {
-            return CompressedData {
+            return MultiCompressedData {
                 engine: Engine::VarInt,
                 binary_data: objs.iter().map(|x| compress_varint(**x)).collect(),
             };
@@ -18,7 +25,7 @@ impl Compress for i128 {
 
         let bit_length = get_bit_length((max - min) as u128);
 
-        CompressedData {
+        MultiCompressedData {
             engine: Engine::FixedInt {
                 bias: min,
                 length: bit_length,
@@ -38,7 +45,11 @@ impl Compress for i128 {
 macro_rules! impl_int {
     ($($t:ty),*) => {
         $(impl Compress for $t {
-            fn compress_multiple(objs: &[&Self], opts: AutoCompressOpts) -> CompressedData {
+            fn compress(&self, opts: AutoCompressOpts) -> CompressedData {
+                (*self as i128).compress(opts)
+            }
+
+            fn compress_multiple(objs: &[&Self], opts: AutoCompressOpts) -> MultiCompressedData {
                 let nums: Vec<i128> = objs.iter().map(|x| **x as i128).collect();
                 let objs: Vec<&i128> = nums.iter().collect();
                 i128::compress_multiple(&objs, opts)

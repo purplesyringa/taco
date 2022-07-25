@@ -1,5 +1,5 @@
 use crate::bits::Bits;
-use crate::compress::{Compress, CompressedData, Engine};
+use crate::compress::{Compress, CompressedData, Engine, MultiCompressedData};
 use crate::huffman::huffman;
 use std::collections::HashMap;
 
@@ -18,7 +18,7 @@ impl Default for AutoCompressOpts {
     }
 }
 
-fn try_autocompress_dedup<T: Compress>(objs: &[&T]) -> Option<CompressedData> {
+fn try_autocompress_dedup<T: Compress>(objs: &[&T]) -> Option<MultiCompressedData> {
     let mut values_list = Vec::new();
     let mut index_of_value = HashMap::new();
     let mut indices = Vec::with_capacity(objs.len());
@@ -34,11 +34,11 @@ fn try_autocompress_dedup<T: Compress>(objs: &[&T]) -> Option<CompressedData> {
 
     if objs.len() > 1 && values_list.len() == 1 {
         // Constant
-        let mut data = autocompress_one(objs[0], AutoCompressOpts::default());
-        Some(CompressedData {
+        let data = autocompress_one(objs[0], AutoCompressOpts::default());
+        Some(MultiCompressedData {
             engine: Engine::Constant {
                 engine: Box::new(data.engine),
-                data: data.binary_data.pop().unwrap(),
+                data: data.binary_data,
             },
             binary_data: vec![Bits::new(); objs.len()],
         })
@@ -58,7 +58,7 @@ fn try_autocompress_dedup<T: Compress>(objs: &[&T]) -> Option<CompressedData> {
                 enable_stateful: true,
             },
         );
-        let alphabet_encoded = CompressedData {
+        let alphabet_encoded = MultiCompressedData {
             engine: Engine::Alphabet {
                 alphabet_engine: Box::new(values_compressed.engine),
                 alphabet_data: values_compressed.binary_data.pop().unwrap(),
@@ -77,7 +77,7 @@ fn try_autocompress_dedup<T: Compress>(objs: &[&T]) -> Option<CompressedData> {
     }
 }
 
-fn try_autocompress_categories<T: Compress>(objs: &[&T]) -> Option<CompressedData> {
+fn try_autocompress_categories<T: Compress>(objs: &[&T]) -> Option<MultiCompressedData> {
     let categories = T::split_categories(objs)?;
     if categories.len() < 2 {
         return None;
@@ -110,7 +110,7 @@ fn try_autocompress_categories<T: Compress>(objs: &[&T]) -> Option<CompressedDat
         }
     }
 
-    Some(CompressedData {
+    Some(MultiCompressedData {
         engine: Engine::CategorySplit {
             categories: categories_engines,
             category: Box::new(category_by_obj_compressed.engine),
@@ -119,9 +119,27 @@ fn try_autocompress_categories<T: Compress>(objs: &[&T]) -> Option<CompressedDat
     })
 }
 
+fn autocompress_stateful<T: Compress>(objs: &[&T], opts: AutoCompressOpts) -> MultiCompressedData {
+    let data = objs.to_vec().compress(opts);
+    MultiCompressedData {
+        engine: Engine::Stateful {
+            inner: Box::new(data.engine),
+            data: data.binary_data,
+        },
+        binary_data: vec![Bits::new(); objs.len()],
+    }
+}
+
 static mut cc: usize = 0usize;
 
-pub fn autocompress<T: Compress>(objs: &[&T], opts: AutoCompressOpts) -> CompressedData {
+pub fn autocompress<T: Compress>(objs: &[&T], opts: AutoCompressOpts) -> MultiCompressedData {
+    if objs.is_empty() {
+        return MultiCompressedData {
+            engine: Engine::VarInt,
+            binary_data: Vec::new(),
+        };
+    }
+
     // println!(
     //     "{}autocompress {objs:?} {opts:?}",
     //     " ".repeat(unsafe { cc })
@@ -135,24 +153,15 @@ pub fn autocompress<T: Compress>(objs: &[&T], opts: AutoCompressOpts) -> Compres
             unsafe {
                 cc -= 1;
             }
-            if data.binary_data.len() != objs.len() {
-                panic!("Length mismatch");
-            }
             return data;
         }
 
         if let Some(data) = try_autocompress_categories(objs) {
-            if data.binary_data.len() != objs.len() {
-                panic!("Length mismatch");
-            }
             unsafe {
                 cc -= 1;
             }
             // This may be less efficient than direct compression
             let data_direct = T::compress_multiple(objs, opts);
-            if data_direct.binary_data.len() != objs.len() {
-                panic!("Length mismatch");
-            }
             if data_direct.weight() < data.weight() {
                 return data_direct;
             }
@@ -160,29 +169,20 @@ pub fn autocompress<T: Compress>(objs: &[&T], opts: AutoCompressOpts) -> Compres
         }
     }
 
-    // if opts.enable_stateful && objs.len() > 1 {
-    //     let data = autocompress_stateful(objs);
-    //     if data.binary_data.len() != objs.len() {
-    //         panic!("Length mismatch");
-    //     }
-    //     unsafe {
-    //         cc -= 1;
-    //     }
-    //     // This may be less efficient than direct compression
-    //     let data_direct = T::compress_multiple(objs, opts);
-    //     if data_direct.binary_data.len() != objs.len() {
-    //         panic!("Length mismatch");
-    //     }
-    //     if data_direct.weight() < data.weight() {
-    //         return data_direct;
-    //     }
-    //     return data;
-    // }
+    if opts.enable_stateful && objs.len() > 1 {
+        let data = autocompress_stateful(objs, opts);
+        unsafe {
+            cc -= 1;
+        }
+        // This may be less efficient than direct compression
+        let data_direct = T::compress_multiple(objs, opts);
+        if data_direct.weight() < data.weight() {
+            return data_direct;
+        }
+        return data;
+    }
 
     let data = T::compress_multiple(objs, opts);
-    if data.binary_data.len() != objs.len() {
-        panic!("Length mismatch");
-    }
     unsafe {
         cc -= 1;
     }
@@ -190,5 +190,16 @@ pub fn autocompress<T: Compress>(objs: &[&T], opts: AutoCompressOpts) -> Compres
 }
 
 pub fn autocompress_one<T: Compress>(obj: &T, opts: AutoCompressOpts) -> CompressedData {
-    autocompress(&[obj], opts)
+    // println!(
+    //     "{}autocompress_one {obj:?} {opts:?}",
+    //     " ".repeat(unsafe { cc })
+    // );
+    unsafe {
+        cc += 1;
+    }
+    let data = obj.compress(opts);
+    unsafe {
+        cc -= 1;
+    }
+    data
 }
